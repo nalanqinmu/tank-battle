@@ -22,19 +22,22 @@
       <span :class="{ 'key-active': keys.d }">D</span>: 左转/右转
     </p>
     <p>
-      <span :class="{ 'key-active': keys.space }">空格</span>: 射击
+      <span :class="{ 'key-active': mouseDown }">鼠标左键</span>: 射击
+    </p>
+    <p>
+      <span>鼠标移动</span>: 控制视角
     </p>
     <p>
       <span :class="{ 'key-active': keys.g }">G</span>: 切换网格显示
     </p>
     <p>
-      <span :class="{ 'key-active': keys.v }">V</span>: 切换视角
-    </p>
-    <p>
       <span :class="{ 'key-active': keys.h }">H</span>: 查看帮助
     </p>
+    <p>
+      <span :class="{ 'key-active': keys.p }">P</span>: 暂停/继续
+    </p>
     <p class="tip">利用掩体躲避敌人攻击</p>
-    <p class="tip">鼠标可拖动调整视角</p>
+    <p class="tip">点击屏幕锁定鼠标并射击</p>
   </div>
   
   <!-- 分数增加动画 -->
@@ -54,7 +57,7 @@
     <h1>坦克战斗</h1>
     <p class="game-description">驾驶坦克与敌人作战，消灭敌方坦克获取高分！</p>
     <button @click="startGame" class="start-button">开始游戏</button>
-    <p class="tip">使用WASD移动，空格键射击</p>
+    <p class="tip">使用WASD移动，鼠标左键射击</p>
   </div>
   
   <!-- 游戏结束界面 -->
@@ -86,19 +89,22 @@
         <h3>基本操作</h3>
         <ul>
           <li><strong>移动：</strong> W(前进)、S(后退)、A(左转)、D(右转)</li>
-          <li><strong>射击：</strong> 空格键</li>
-          <li><strong>视角切换：</strong> V键 - 在第三人称跟随视角和自由视角之间切换</li>
+          <li><strong>射击：</strong> 鼠标左键点击或按住</li>
+          <li><strong>视角控制：</strong> 移动鼠标（仅水平）调整视角 (需点击屏幕锁定指针，按 ESC 键释放)</li>
           <li><strong>网格显示：</strong> G键 - 切换地面网格显示</li>
+          <li><strong>帮助显示：</strong> H键 - 切换此帮助面板</li>
+          <li><strong>暂停/继续：</strong> P键 - 切换游戏暂停状态</li>
         </ul>
       </div>
       
       <div class="help-section">
         <h3>游戏技巧</h3>
         <ul>
+          <li>点击游戏界面锁定鼠标指针，以启用鼠标视角控制</li>
           <li>利用掩体躲避敌人攻击，避免被多个敌人同时瞄准</li>
           <li>当血量低时，寻找掩护并保持距离</li>
           <li>射击敌人可以获得分数，摧毁敌人坦克获得更多分数</li>
-          <li>第三人称视角有更好的沉浸感，自由视角便于观察战场</li>
+          <li>熟练运用鼠标控制视角，观察周围环境</li>
           <li>当被敌人坦克包围时，快速转向并寻找突破口</li>
         </ul>
       </div>
@@ -114,12 +120,17 @@
       </div>
     </div>
   </div>
+  
+  <!-- 暂停游戏提示 -->
+  <div v-if="isPaused && gameStarted && !gameOver" class="pause-overlay">
+    <h2>游戏已暂停</h2>
+    <p>按 P 键继续游戏</p>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue';
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import * as CANNON from 'cannon-es';
 import { Bullet } from './Bullet';
 import { EnemyTank } from './EnemyTank';
@@ -130,9 +141,24 @@ const health = ref(100);
 const gameOver = ref(false);
 const webGLSupported = ref(true);
 const showGrid = ref(false); // 控制是否显示网格，默认不显示
-const thirdPersonView = ref(true); // 控制是否使用第三人称视角
 const showHelp = ref(true); // 默认显示帮助面板
 const gameStarted = ref(false); // 控制游戏是否开始
+const mouseDown = ref(false); // 鼠标左键按下状态
+const mousePosition = { x: 0, y: 0, lastX: 0, lastY: 0 }; // 鼠标位置
+const pointerLocked = ref(false); // 指针锁定状态
+const lastShootTime = ref(0); // 上次射击时间
+const shootInterval = 0.3; // 射击间隔时间（秒）
+const isPaused = ref(false); // 游戏暂停状态
+const isMouseControlEnabled = ref(false); // 是否启用鼠标控制
+
+// 摄像机控制参数
+const cameraAngleH = ref(0); // 水平角度
+const cameraAngleV = ref(Math.PI / 6); // 垂直角度 (初始向上倾斜)
+const mouseSensitivity = 0.002; // 鼠标灵敏度
+const followDistance = 10; // 相机跟随距离
+const cameraLerpFactor = 0.1; // 相机移动平滑系数
+// const minVerticalAngle = 0.1; // 移除 - 垂直角度不再由鼠标控制
+// const maxVerticalAngle = Math.PI / 2 - 0.1; // 移除 - 垂直角度不再由鼠标控制
 
 // 场景容器引用
 const sceneContainer = ref<HTMLDivElement>();
@@ -141,7 +167,6 @@ const sceneContainer = ref<HTMLDivElement>();
 let scene: THREE.Scene;
 let camera: THREE.PerspectiveCamera;
 let renderer: THREE.WebGLRenderer;
-let controls: OrbitControls;
 
 // 物理世界
 let world: CANNON.World;
@@ -149,7 +174,6 @@ let world: CANNON.World;
 // 游戏对象
 let tank: THREE.Object3D | null = null;
 let tankBody: CANNON.Body | null = null;
-let turret: THREE.Object3D | null = null;
 let bullets: Bullet[] = [];
 let enemyBullets: Bullet[] = [];
 let enemies: EnemyTank[] = [];
@@ -172,9 +196,9 @@ const keys = {
   s: false,
   d: false,
   g: false,
-  v: false, // 添加V键用于切换视角
-  space: false,
-  h: false // 添加H键用于显示帮助面板
+  // space: false, // 移除 space 状态
+  h: false, // 添加H键用于显示帮助面板
+  p: false  // 添加P键用于暂停游戏
 };
 
 // 检查WebGL支持
@@ -332,7 +356,7 @@ const createSimpleScene = () => {
   updateGridHelperVisibility();
   
   // 创建掩体
-  createObstacles(15); // 创建15个掩体
+  createObstacles(20); // 创建20个掩体
   
   console.log('简单场景创建完成，对象数量:', scene.children.length);
 };
@@ -394,16 +418,16 @@ const initScene = () => {
   
   // 创建场景
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x87CEEB); // 更准确的天空蓝色
+  scene.background = new THREE.Color(0x87CEEB);
   
   try {
-    // 创建相机 - 使用更低的视角增强沉浸感
+    // 创建相机
     const aspect = window.innerWidth / window.innerHeight;
-    camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 1000);
-    camera.position.set(0, 10, 15); // 降低高度，减小距离
-    camera.lookAt(0, 0, 0);
+    camera = new THREE.PerspectiveCamera(60, aspect, 0.1, 1000); 
+    // 初始位置和朝向将在 updateCamera 中设置
+    // camera.lookAt(0, 0, 0);
     
-    // 创建渲染器 - 使用基本设置
+    // 创建渲染器
     renderer = new THREE.WebGLRenderer({ 
       antialias: true,
       canvas: document.createElement('canvas')
@@ -415,17 +439,14 @@ const initScene = () => {
     sceneContainer.value.innerHTML = '';
     sceneContainer.value.appendChild(renderer.domElement);
     
-    // 使用简单控制，不启用damping (可能导致问题)
-    controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = false;
-    controls.maxPolarAngle = Math.PI / 2 - 0.1; // 限制视角不要看到地面以下
+    // 添加鼠标事件监听 - click 触发 PointerLock, mousemove 由 document 监听
+    renderer.domElement.addEventListener('click', handleCanvasClick);
+    document.addEventListener('mousemove', handleMouseMove); // 监听 document
+    document.addEventListener('mousedown', handleMouseDown); // 在 document 上添加监听器
+    document.addEventListener('mouseup', handleMouseUp); // 监听 document
     
-    // 禁用部分控制以避免与相机跟随冲突
-    controls.enableZoom = true; // 允许缩放
-    controls.enablePan = false; // 禁止平移
-    controls.enableRotate = false; // 禁止旋转
-    controls.minDistance = 5; // 最小距离
-    controls.maxDistance = 30; // 最大距离
+    // 添加窗口大小调整
+    window.addEventListener('resize', onWindowResize);
     
     // 添加灯光
     const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
@@ -447,9 +468,6 @@ const initScene = () => {
     
     // 初始化声音系统
     initSounds();
-    
-    // 窗口大小调整
-    window.addEventListener('resize', onWindowResize);
     
     // 立即渲染一次确认场景可见
     renderer.render(scene, camera);
@@ -474,19 +492,23 @@ const handleKeyDown = (event: KeyboardEvent) => {
   // 获取键值
   const key = event.key.toLowerCase();
   
+  // 处理P键暂停，无论游戏状态如何都允许
+  if (key === 'p' && !keys.p && gameStarted.value && !gameOver.value) {
+    keys.p = true;
+    togglePause();
+    return;
+  }
+  
+  // 如果游戏暂停中，不处理其他键盘输入
+  if (isPaused.value) {
+    return;
+  }
+  
   // 如果是G键而且之前未按下，则切换网格显示
   if (key === 'g' && !keys.g) {
     keys.g = true;
     showGrid.value = !showGrid.value;
     updateGridHelperVisibility();
-    return;
-  }
-  
-  // 如果是V键而且之前未按下，则切换视角模式
-  if (key === 'v' && !keys.v) {
-    keys.v = true;
-    thirdPersonView.value = !thirdPersonView.value;
-    console.log(`视角模式切换为: ${thirdPersonView.value ? '第三人称' : '自由视角'}`);
     return;
   }
   
@@ -502,10 +524,10 @@ const handleKeyDown = (event: KeyboardEvent) => {
     case 'a': keys.a = true; break;
     case 's': keys.s = true; break;
     case 'd': keys.d = true; break;
-    case ' ': 
-      keys.space = true; 
-      fireSimpleBullet(); 
-      break;
+    // case ' ': 
+    //   keys.space = true; 
+    //   fireSimpleBullet(); 
+    //   break; // 移除空格键开火逻辑
   }
 };
 
@@ -517,107 +539,136 @@ const handleKeyUp = (event: KeyboardEvent) => {
     case 's': keys.s = false; break;
     case 'd': keys.d = false; break;
     case 'g': keys.g = false; break;
-    case 'v': keys.v = false; break;
     case 'h': keys.h = false; break;
-    case ' ': keys.space = false; break;
+    case 'p': keys.p = false; break;
+    // case ' ': keys.space = false; break; // 移除空格键状态更新
+  }
+};
+
+// 切换游戏暂停状态
+const togglePause = () => {
+  isPaused.value = !isPaused.value;
+  console.log('游戏暂停状态:', isPaused.value);
+  
+  if (isPaused.value) {
+    // 游戏暂停，释放指针锁定
+    if (pointerLocked.value) {
+      document.exitPointerLock(); // 退出锁定
+    }
+  } else {
+    // 游戏继续，恢复动画循环
+    if (animationFrameId === null) {
+      lastTime = performance.now();
+      animationFrameId = requestAnimationFrame(animate);
+    }
+    // (可选) 可以在此处重新请求指针锁定，如果需要的话
+    // else if (sceneContainer.value && !pointerLocked.value) {
+    //   sceneContainer.value.requestPointerLock();
+    // }
   }
 };
 
 // 简化版发射子弹
 const fireSimpleBullet = () => {
-  if (!tank || !tankBody) return;
+  // console.log('fireSimpleBullet() called. Tank/Body exists?', !!tank, !!tankBody); // 移除日志
+  if (!tank || !tankBody) {
+    // console.log('fireSimpleBullet blocked: Tank or Body missing.'); // 移除日志
+    return;
+  }
   
   // 创建一个简单的球体表示子弹
   const bulletGeometry = new THREE.SphereGeometry(0.2, 8, 8);
   const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
   const bulletMesh = new THREE.Mesh(bulletGeometry, bulletMaterial);
   
-  // 设置子弹位置在坦克前方
-  // 修复方向问题，将Z轴正向作为坦克前进方向
-  const tankDirection = new THREE.Vector3(0, 0, 1).applyQuaternion(tank.quaternion);
-  const bulletPosition = new THREE.Vector3().copy(tank.position).add(
-    tankDirection.multiplyScalar(2)
-  );
-  bulletPosition.y = 1; // 稍微抬高一点
-  bulletMesh.position.copy(bulletPosition);
+  // TPS 模式: 子弹方向基于坦克自身朝向
+  const bulletDirection = new THREE.Vector3(0, 0, 1); // 坦克局部坐标系Z轴正方向
+  bulletDirection.applyQuaternion(tank.quaternion); // 转换到世界坐标系
+  bulletDirection.normalize();
+
+  // TPS 模式: 子弹位置从坦克前方模拟炮管位置发射
+  const muzzleOffset = new THREE.Vector3(0, 0.5, 1.5); // x=0, y=0.5(中心偏上), z=1.5(炮管长度)
+  const bulletPosition = tank.localToWorld(muzzleOffset.clone());
   
+  bulletMesh.position.copy(bulletPosition);
   scene.add(bulletMesh);
   
   // 记录子弹信息
   bullets.push({
     mesh: bulletMesh,
-    direction: tankDirection,
+    direction: bulletDirection,
     speed: 0.5,
     lifetime: 5,
     isActive: true
   });
   
   // 创建射击特效
-  createMuzzleFlash(bulletPosition.clone(), tankDirection);
+  createMuzzleFlash(bulletPosition.clone(), bulletDirection);
   
   // 播放射击声音
   playSound(shootSound);
 };
 
-// 简化版坦克移动，直接操作3D对象而不是通过物理引擎
+// 简化版坦克移动，恢复为 A/D 转弯, W/S 前后
 const updateSimpleTankMovement = () => {
-  if (!tank) return;
+  if (!tank || !tankBody) return;
+
+  const moveSpeed = 0.15; // 移动速度
+  const rotateSpeed = 0.03; // 旋转速度
+
+  // 获取坦克的前方向 (基于坦克自身旋转)
+  const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(tank.quaternion);
   
-  const moveSpeed = 0.15;
-  const rotateSpeed = 0.03;
-  
-  // 坦克当前位置
-  const currentPosition = tank.position.clone();
-  let newPosition = currentPosition.clone();
-  
-  // 计算移动后的新位置
+  // 计算当前帧的移动向量
+  const moveVector = new THREE.Vector3(0, 0, 0);
   if (keys.w) {
-    // 修复方向问题，将Z轴正向作为坦克前进方向
-    const direction = new THREE.Vector3(0, 0, 1).applyQuaternion(tank.quaternion);
-    newPosition.add(direction.multiplyScalar(moveSpeed));
+    moveVector.add(forward.clone().multiplyScalar(moveSpeed));
   }
-  
   if (keys.s) {
-    // 修复方向问题，将Z轴负向作为坦克后退方向
-    const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(tank.quaternion);
-    newPosition.add(direction.multiplyScalar(moveSpeed));
+    moveVector.sub(forward.clone().multiplyScalar(moveSpeed));
+  }
+
+  // 应用旋转
+  if (keys.a) { 
+    tank.rotateY(rotateSpeed);
+  }
+  if (keys.d) { 
+    tank.rotateY(-rotateSpeed);
   }
   
-  // 检查新位置是否与障碍物碰撞
+  // 计算新的潜在位置
+  const currentPosition = tank.position.clone();
+  const newPosition = currentPosition.clone().add(moveVector);
+
+  // --- 简单的碰撞检测 (保持不变) ---
   let collisionDetected = false;
   for (const obstacle of obstacles) {
-    // 计算坦克与障碍物之间的距离
     const distance = newPosition.distanceTo(obstacle.mesh.position);
-    
-    // 如果距离小于坦克和障碍物的半径之和，则认为发生碰撞
-    // 坦克尺寸约1.5x2.5，障碍物尺寸3x3，使用3.0作为安全距离
-    if (distance < 3.0) {
+    // 坦克尺寸约1.5x2.5，障碍物尺寸3x3，使用简化的碰撞半径
+    const collisionRadius = 1.5 + 1.5; // 坦克半径 + 障碍物半径 (近似)
+    if (distance < collisionRadius) {
       collisionDetected = true;
       break;
     }
   }
-  
+
   // 只有在没有碰撞的情况下才更新位置
   if (!collisionDetected) {
     tank.position.copy(newPosition);
   } else {
-    // 如果发生碰撞，可以播放碰撞音效或显示视觉反馈
+    // 如果发生碰撞，可以尝试只应用未碰撞方向的移动分量（更复杂的处理）
+    // 简单的处理：不动
     console.log("坦克与障碍物碰撞");
   }
-  
-  // 旋转不受碰撞影响
-  if (keys.a) {
-    tank.rotation.y += rotateSpeed;
-  }
-  
-  if (keys.d) {
-    tank.rotation.y -= rotateSpeed;
-  }
-  
-  // 同步物理体位置（如果需要）
+
+  // --- 更新坦克朝向 ---
+  // 在TPS模式下，坦克朝向由 A/D 键控制，不需要根据相机方向设置
+  // tank.rotation.y = Math.atan2(cameraDirection.x, cameraDirection.z); 
+
+  // 同步物理体位置和旋转
   if (tankBody) {
     tankBody.position.copy(tank.position);
-    tankBody.quaternion.copy(tank.quaternion);
+    tankBody.quaternion.copy(tank.quaternion); // 使用坦克的旋转
   }
 };
 
@@ -632,6 +683,13 @@ const onWindowResize = () => {
 // 简化版动画循环
 const animate = () => {
   if (gameOver.value || !gameStarted.value) return;
+  
+  // 如果游戏暂停，不继续渲染
+  if (isPaused.value) {
+    // 需要继续请求下一帧，否则无法在暂停后恢复
+    animationFrameId = requestAnimationFrame(animate); 
+    return;
+  }
   
   const currentTime = performance.now();
   const deltaTime = (currentTime - lastTime) / 1000;
@@ -658,13 +716,36 @@ const animate = () => {
     // 检测碰撞
     checkCollisions();
     
-    // 更新轨道控制器
-    controls.update();
+    // 处理持续射击
+    updateContinuousShooting(deltaTime);
     
     // 渲染场景
     renderer.render(scene, camera);
   } catch (e) {
     console.error('渲染错误:', e);
+  }
+};
+
+// 处理持续射击
+const updateContinuousShooting = (deltaTime) => {
+  // 如果未开始游戏或游戏结束，不处理射击
+  if (!gameStarted.value || gameOver.value) return;
+  
+  // console.log('Checking continuous shooting. mouseDown:', mouseDown.value); // 添加日志
+  // 检查是否持续按下鼠标左键
+  if (mouseDown.value) {
+    // 更新上次射击时间
+    lastShootTime.value -= deltaTime;
+    
+    // 如果达到射击间隔，允许再次射击
+    if (lastShootTime.value <= 0) {
+      console.log('Firing from updateContinuousShooting. mouseDown:', mouseDown.value); // 添加日志
+      fireSimpleBullet();
+      lastShootTime.value = shootInterval; // 重置射击计时器
+      
+      // 记录射击事件
+      // console.log('射击', new Date().toISOString()); // 暂时注释掉，避免过多日志
+    }
   }
 };
 
@@ -723,7 +804,7 @@ const restartGame = () => {
   }
   
   // 重新创建掩体
-  createObstacles(15);
+  createObstacles(20);
   
   // 重置敌人生成计时器
   enemySpawnTimer = 3;
@@ -739,41 +820,44 @@ const restartGame = () => {
 const initializeEnemySystem = () => {
   // 创建敌人几何体
   const enemyGeometry = new THREE.BoxGeometry(1.5, 0.8, 2.5);
-  
+
   // 先创建默认材质和实例化网格
-  const defaultMaterial = new THREE.MeshBasicMaterial({ 
+  const defaultMaterial = new THREE.MeshBasicMaterial({
     color: 0xff4444, // 鲜明的红色
     wireframe: false // 实体显示
   });
-  const instancedMesh = new THREE.InstancedMesh(enemyGeometry, defaultMaterial, 10);
-  instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  instancedMesh.count = 0;
-  scene.add(instancedMesh);
-  
-  console.log('敌方坦克实例化网格已创建');
-  
-  // 尝试加载敌人纹理并更新材质
+  const instancedMesh = new THREE.InstancedMesh(enemyGeometry, defaultMaterial, 10); // 假设最多10个敌人
+  instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); // 允许高效更新矩阵
+  instancedMesh.count = 0; // 初始实例数量为0
+  scene.add(instancedMesh); // 将实例化网格添加到场景
+
+  // *** 添加此行以禁用视锥体剔除 ***
+  instancedMesh.frustumCulled = false;
+  // *********************************
+
+  console.log('敌方坦克实例化网格已创建，并已禁用视锥体剔除');
+
+  // 尝试加载敌人纹理并更新材质 (异步)
   const textureLoader = new THREE.TextureLoader();
   textureLoader.load('/textures/enemy_tank.png', (texture) => {
     console.log('敌方坦克纹理加载成功:', texture.uuid);
     texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    
-    // 创建敌方坦克专用纹理材质，不添加额外颜色干扰
+
+    // 创建带有纹理的材质
     const texturedMaterial = new THREE.MeshStandardMaterial({
       map: texture,
       metalness: 0.7,
       roughness: 0.3
-      // 移除 color 设置，让纹理本身的颜色显示
     });
-    
+
     // 更新实例化网格的材质
     instancedMesh.material = texturedMaterial;
-    console.log('敌方坦克材质已更新为纹理材质，不使用额外颜色');
+    console.log('敌方坦克材质已更新为纹理材质');
   }, undefined, (err) => {
     console.warn('敌方坦克纹理加载失败，保持默认材质:', err);
   });
-  
-  // 直接返回已创建的实例化网格
+
+  // 返回创建的实例化网格引用
   return instancedMesh;
 };
 
@@ -856,179 +940,147 @@ const spawnEnemy = () => {
 const updateEnemies = (deltaTime) => {
   // 更新敌人生成计时器
   enemySpawnTimer -= deltaTime;
-  if (enemySpawnTimer <= 0) {
+  if (enemySpawnTimer <= 0 && enemies.length < 5 /* 检查数量避免过度生成 */) {
     spawnEnemy();
     enemySpawnTimer = 3 + Math.random() * 2; // 3-5秒生成一个敌人
   }
   
-  // 更新每个敌人
-  enemies.forEach((enemy, index) => {
-    if (!tank) return;
+  // --- 使用反向 for 循环更新敌人 --- 
+  for (let index = enemies.length - 1; index >= 0; index--) {
+    const enemy = enemies[index];
+    if (!tank) return; // 如果玩家坦克不存在，停止更新
     
-    // 获取到坦克的方向
-    const direction = new THREE.Vector3();
-    direction.subVectors(tank.position, enemy.mesh.position).normalize();
-    
-    // 让敌人朝向坦克
-    if (!enemy.mesh.isInstancedMesh) {
-      // 普通网格直接处理
-      enemy.mesh.lookAt(tank.position);
-    } else {
-      // 实例化网格需要更新矩阵
-      const targetAngle = Math.atan2(
-        tank.position.x - enemy.mesh.position.x,
-        tank.position.z - enemy.mesh.position.z
-      );
+    // --- 检查敌人健康状态 --- 
+    if (enemy.health <= 0) {
+      // 敌人被消灭
+      console.log(`敌人 ${enemy.mesh.isInstancedMesh ? '实例 ' + enemy.mesh.instanceId : 'Mesh'} 被消灭 (Index: ${index})`);
+      createExplosion(enemy.mesh.position.clone());
+      playSound(explosionSound);
       
-      // 更新虚拟网格的朝向
-      enemy.mesh.rotation.y = targetAngle;
-      
-      // 更新实例化网格的矩阵
-      if (enemyInstancedMesh) {
+      // 清理敌人渲染模型
+      if (!enemy.mesh.isInstancedMesh && enemy.mesh instanceof THREE.Mesh) {
+        scene.remove(enemy.mesh);
+        console.log('移除普通敌人 Mesh');
+      } else if (enemyInstancedMesh && enemy.mesh.isInstancedMesh) {
+        // 对于实例化网格，缩放为0来隐藏
         try {
-          const matrix = new THREE.Matrix4();
-          // 先处理位置
-          matrix.makeTranslation(
-            enemy.mesh.position.x,
-            enemy.mesh.position.y,
-            enemy.mesh.position.z
-          );
-          
-          // 再处理旋转
-          const rotationMatrix = new THREE.Matrix4();
-          rotationMatrix.makeRotationY(enemy.mesh.rotation.y);
-          matrix.multiply(rotationMatrix);
-          
-          // 设置矩阵
+          const matrix = new THREE.Matrix4().makeScale(0, 0, 0);
           enemyInstancedMesh.setMatrixAt(enemy.mesh.instanceId, matrix);
-          // 标记需要更新
-          enemyInstancedMesh.instanceMatrix.needsUpdate = true;
+          // instanceMatrix.needsUpdate 会在循环外统一设置
+          console.log('隐藏敌人实例:', enemy.mesh.instanceId);
         } catch (error) {
-          console.error('更新敌人矩阵出错:', error, enemy);
+          console.error('隐藏敌人实例出错:', error, enemy);
         }
+      } else {
+        console.warn("无法识别的敌人 Mesh 类型，无法清理渲染模型", enemy.mesh);
       }
-    }
-    
-    // 简单AI: 如果玩家在一定距离内，敌人会接近
-    const distanceToPlayer = enemy.mesh.position.distanceTo(tank.position);
-    
-    if (distanceToPlayer < 25) {
-      // 计算前进方向
-      const moveDirection = direction.clone();
       
-      // 简单的避障算法
-      // 检查附近是否有障碍物
+      // 清理物理实体
+      world.removeBody(enemy.body);
+      
+      // 从数组中移除
+      enemies.splice(index, 1);
+      
+      // 更新分数和动画
+      score.value += 100;
+      showScoreAnimation(enemy.mesh.position.clone(), 100);
+
+      // 继续处理下一个敌人 (因为是反向循环，splice后继续是安全的)
+      continue; 
+    }
+
+    // --- 如果敌人未被消灭，则更新其行为 --- 
+    const distanceToPlayer = enemy.mesh.position.distanceTo(tank.position);
+    const directionToPlayer = new THREE.Vector3().subVectors(tank.position, enemy.mesh.position).normalize();
+    
+    // 计算目标旋转角度 (Y轴)
+    const targetAngle = Math.atan2(directionToPlayer.x, directionToPlayer.z);
+    
+    // --- 计算移动 --- 
+    let newPosition = enemy.mesh.position.clone(); 
+    if (distanceToPlayer < 25) { // 靠近玩家时才移动
+      let moveDirection = directionToPlayer.clone();
+      
+      // 简单的避障
       let obstacleAvoidance = new THREE.Vector3();
       for (const obstacle of obstacles) {
         const distanceToObstacle = enemy.mesh.position.distanceTo(obstacle.mesh.position);
-        
-        // 如果障碍物在附近，尝试绕过它
-        if (distanceToObstacle < 5) {
-          // 计算避障向量 (远离障碍物)
+        if (distanceToObstacle < 5) { // 避障半径
           const avoidDir = new THREE.Vector3()
             .subVectors(enemy.mesh.position, obstacle.mesh.position)
             .normalize()
-            .multiplyScalar(5 - distanceToObstacle); // 距离越近，避障力越大
-          
+            .multiplyScalar(5 - distanceToObstacle); // 距离越近，避开力度越大
           obstacleAvoidance.add(avoidDir);
         }
       }
-      
-      // 如果有障碍物需要避开，调整方向
-      if (obstacleAvoidance.length() > 0) {
-        // 混合原始方向和避障方向
-        moveDirection.add(obstacleAvoidance.multiplyScalar(0.5));
-        moveDirection.normalize();
+      if (obstacleAvoidance.lengthSq() > 0) {
+        moveDirection.add(obstacleAvoidance.multiplyScalar(0.5)).normalize(); // 混合避障向量
       }
       
-      // 接近玩家
-      const moveSpeed = 0.05;
-      const newPosition = enemy.mesh.position.clone().add(
+      // 计算潜在的新位置
+      const moveSpeed = 0.05; // 敌人移动速度
+      const potentialNewPosition = enemy.mesh.position.clone().add(
         moveDirection.multiplyScalar(moveSpeed)
       );
-      
-      // 确保新位置不会与其他障碍物重叠
+
+      // 再次检查新位置是否会碰撞 (简化检查)
       let validPosition = true;
+      const collisionRadius = 1.5 + 1.5; // Enemy radius + obstacle radius
       for (const obstacle of obstacles) {
-        if (newPosition.distanceTo(obstacle.mesh.position) < 3) {
+        if (potentialNewPosition.distanceTo(obstacle.mesh.position) < collisionRadius) {
           validPosition = false;
           break;
         }
       }
-      
-      // 只有在新位置有效时才移动
-      if (validPosition) {
-        enemy.mesh.position.copy(newPosition);
-        enemy.body.position.copy(newPosition);
-        
-        // 如果是实例化网格，确保更新位置
-        if (enemy.mesh.isInstancedMesh && enemyInstancedMesh) {
-          try {
-            const matrix = new THREE.Matrix4();
-            // 先处理位置
-            matrix.makeTranslation(
-              enemy.mesh.position.x,
-              enemy.mesh.position.y,
-              enemy.mesh.position.z
-            );
-            
-            // 再处理旋转
-            const rotationMatrix = new THREE.Matrix4();
-            rotationMatrix.makeRotationY(enemy.mesh.rotation.y);
-            matrix.multiply(rotationMatrix);
-            
-            // 设置矩阵
-            enemyInstancedMesh.setMatrixAt(enemy.mesh.instanceId, matrix);
-            // 标记需要更新
-            enemyInstancedMesh.instanceMatrix.needsUpdate = true;
-          } catch (error) {
-            console.error('更新敌人位置出错:', error, enemy);
-          }
-        }
+      // 检查与玩家的碰撞
+      if (validPosition && potentialNewPosition.distanceTo(tank.position) < 3) { // 假设碰撞半径为3
+          validPosition = false;
       }
-      
-      // 射击玩家
-      enemy.lastShootTime -= deltaTime;
-      if (enemy.lastShootTime <= 0 && distanceToPlayer < 15) {
-        fireEnemyBullet(enemy);
-        enemy.lastShootTime = 2 + Math.random() * 2; // 2-4秒射击一次
+
+      // 更新位置
+      if (validPosition) {
+        newPosition.copy(potentialNewPosition);
+      }
+    }
+
+    // --- 更新虚拟网格和物理实体 --- 
+    enemy.mesh.position.copy(newPosition);
+    enemy.mesh.rotation.y = targetAngle; // 更新虚拟旋转
+    enemy.body.position.copy(newPosition);
+    enemy.body.quaternion.setFromEuler(0, targetAngle, 0); // 更新物理旋转
+    
+    // --- 更新渲染模型（Mesh 或 InstancedMesh） --- 
+    if (!enemy.mesh.isInstancedMesh && enemy.mesh instanceof THREE.Mesh) {
+      // 普通网格: 直接更新
+      enemy.mesh.position.copy(newPosition);
+      enemy.mesh.rotation.y = targetAngle; 
+    } else if (enemyInstancedMesh && enemy.mesh.isInstancedMesh) {
+      // 实例化网格: 更新矩阵
+      try {
+        const matrix = new THREE.Matrix4();
+        matrix.makeRotationY(targetAngle); // 应用旋转
+        matrix.setPosition(newPosition);   // 应用位置
+        enemyInstancedMesh.setMatrixAt(enemy.mesh.instanceId, matrix);
+        // instanceMatrix.needsUpdate 会在循环外统一设置
+      } catch (error) {
+        console.error('更新敌人实例矩阵出错:', error, enemy);
       }
     }
     
-    // 检查敌人健康状态
-    if (enemy.health <= 0) {
-      // 敌人被消灭
-      createExplosion(enemy.mesh.position.clone());
-      
-      // 播放爆炸声音
-      playSound(explosionSound);
-      
-      // 清理敌人
-      if (!enemy.mesh.isInstancedMesh) {
-        scene.remove(enemy.mesh);
-      } else if (enemyInstancedMesh) {
-        // 对于实例化网格，我们将其移到场景外隐藏
-        try {
-          const matrix = new THREE.Matrix4();
-          matrix.makeTranslation(0, -1000, 0); // 移到场景外
-          enemyInstancedMesh.setMatrixAt(enemy.mesh.instanceId, matrix);
-          enemyInstancedMesh.instanceMatrix.needsUpdate = true;
-          console.log('隐藏敌人实例:', enemy.mesh.instanceId);
-        } catch (error) {
-          console.error('隐藏敌人出错:', error, enemy);
+    // --- 处理射击 --- 
+    if (distanceToPlayer < 20) { // 射击距离
+        enemy.lastShootTime -= deltaTime;
+        if (enemy.lastShootTime <= 0 && distanceToPlayer > 5 /* 不要离太近射击 */) { 
+            fireEnemyBullet(enemy);
+            enemy.lastShootTime = 2 + Math.random() * 2; // 2-4秒射击一次
         }
-      }
-      
-      world.removeBody(enemy.body);
-      enemies.splice(index, 1);
-      
-      // 增加分数
-      score.value += 100;
-      
-      // 显示分数动画
-      showScoreAnimation(enemy.mesh.position.clone(), 100);
     }
-  });
+  }
+  
+  // 在所有实例矩阵更新后，标记 instanceMatrix 需要更新
+  if (enemyInstancedMesh && enemies.some(e => e.mesh.isInstancedMesh)) { // 只有在确实有实例时才标记
+      enemyInstancedMesh.instanceMatrix.needsUpdate = true;
+  }
 };
 
 // 敌人射击功能
@@ -1708,6 +1760,21 @@ onMounted(() => {
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     
+    // 添加 Pointer Lock 事件监听
+    document.addEventListener('pointerlockchange', onPointerLockChange, false);
+    document.addEventListener('mozpointerlockchange', onPointerLockChange, false);
+    document.addEventListener('webkitpointerlockchange', onPointerLockChange, false);
+    document.addEventListener('pointerlockerror', onPointerLockError, false);
+    document.addEventListener('mozpointerlockerror', onPointerLockError, false);
+    document.addEventListener('webkitpointerlockerror', onPointerLockError, false);
+
+    // 添加 ESC 键释放指针锁定
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && pointerLocked.value) {
+        document.exitPointerLock();
+      }
+    });
+    
     // 设置初始时间
     lastTime = performance.now();
     
@@ -1725,6 +1792,28 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', onWindowResize);
   window.removeEventListener('keydown', handleKeyDown);
   window.removeEventListener('keyup', handleKeyUp);
+  // 移除 document 上的 mousemove
+  document.removeEventListener('mousemove', handleMouseMove);
+
+  // 清理 Pointer Lock 事件监听
+  document.removeEventListener('pointerlockchange', onPointerLockChange, false);
+  document.removeEventListener('mozpointerlockchange', onPointerLockChange, false);
+  document.removeEventListener('webkitpointerlockchange', onPointerLockChange, false);
+  document.removeEventListener('pointerlockerror', onPointerLockError, false);
+  document.removeEventListener('mozpointerlockerror', onPointerLockError, false);
+  document.removeEventListener('webkitpointerlockerror', onPointerLockError, false);
+  
+  // 清理鼠标事件监听
+  if (renderer && renderer.domElement) {
+    // renderer.domElement.removeEventListener('mousedown', handleMouseDown); // 移除旧的清理
+    renderer.domElement.removeEventListener('mouseup', handleMouseUp); // 这个还在renderer上？不对，mouseup也改到document了
+    // renderer.domElement.removeEventListener('mousemove', handleMouseMove); // 已移至window
+    renderer.domElement.removeEventListener('click', handleCanvasClick);
+  }
+  // 移除 document 上的 mouseup 监听
+  document.removeEventListener('mouseup', handleMouseUp);
+  // 移除 document 上的 mousedown 监听
+  document.removeEventListener('mousedown', handleMouseDown); 
   
   // 取消动画帧
   if (animationFrameId !== null) {
@@ -1776,39 +1865,49 @@ onBeforeUnmount(() => {
   }
 });
 
-// 更新相机跟随坦克
+// 更新相机跟随坦克，修改为鼠标控制TPS风格
 const updateCamera = () => {
-  if (!tank) return;
+  if (!tank || !camera) return;
+
+  // 计算相机观察目标的偏移量（看向坦克中心偏上一点）
+  const lookAtOffset = new THREE.Vector3(0, 1, 0); 
+  const lookAtPosition = tank.position.clone().add(lookAtOffset);
+
+  // --- 计算相机基于角度和距离的位置 ---
+  const offsetX = followDistance * Math.sin(cameraAngleH.value) * Math.cos(cameraAngleV.value);
+  const offsetY = followDistance * Math.sin(cameraAngleV.value);
+  const offsetZ = followDistance * Math.cos(cameraAngleH.value) * Math.cos(cameraAngleV.value);
   
-  if (thirdPersonView.value) {
-    // 第三人称视角 - 跟随坦克
-    
-    // 相机与坦克的相对位置（在坦克后方偏上）
-    const offset = new THREE.Vector3(0, 8, 12);
-    
-    // 计算坦克的前进方向 - 修正为Z轴正方向
-    const tankDirection = new THREE.Vector3(0, 0, 1).applyQuaternion(tank.quaternion);
-    
-    // 计算相机的目标位置（在坦克后方）
-    const targetPosition = tank.position.clone().sub(tankDirection.clone().multiplyScalar(offset.z));
-    targetPosition.y = offset.y; // 设置相机高度
-    
-    // 平滑移动相机
-    camera.position.lerp(targetPosition, 0.05);
-    
-    // 相机看向坦克前方
-    const lookAtPosition = tank.position.clone().add(tankDirection.clone().multiplyScalar(10));
-    camera.lookAt(lookAtPosition);
-    
-    // 禁用轨道控制器
-    controls.enabled = false;
-  } else {
-    // 自由视角模式
-    controls.enabled = true;
-    
-    // 自动将相机旋转中心设为坦克位置
-    controls.target.copy(tank.position);
+  const cameraOffset = new THREE.Vector3(offsetX, offsetY, offsetZ);
+
+  // 计算相机的理想世界坐标
+  const idealPosition = tank.position.clone().add(cameraOffset);
+
+  // --- 简单的视线遮挡检查 (可选，但推荐) ---
+  const raycaster = new THREE.Raycaster();
+  const direction = new THREE.Vector3().subVectors(idealPosition, lookAtPosition).normalize();
+  raycaster.set(lookAtPosition, direction);
+  raycaster.far = followDistance; // 只检查相机和坦克之间的距离
+
+  // 获取可能阻挡视线的物体 (只检查障碍物)
+  const intersects = raycaster.intersectObjects(obstacles.map(o => o.mesh)); 
+
+  let finalCameraPosition = idealPosition;
+  if (intersects.length > 0) {
+    // 如果有遮挡，将相机拉近到最近的碰撞点再往后一点点
+    finalCameraPosition = intersects[0].point.clone().add(direction.multiplyScalar(-0.5)); // 稍微后退避免穿模
+    console.log("相机视线被遮挡，拉近相机");
   }
+
+  // 使用lerp平滑过渡相机位置
+  camera.position.lerp(finalCameraPosition, cameraLerpFactor); 
+
+  // 始终让相机看向目标点
+  camera.lookAt(lookAtPosition);
+
+  // 移除旧的 OrbitControls/thirdPersonView 相关逻辑
+  // if (thirdPersonView.value) { ... } else { ... }
+  // controls.update(); // 移除
 };
 
 // 开始游戏
@@ -1831,6 +1930,180 @@ const startGame = () => {
     } catch (e) {
       console.warn('播放引擎声音出错:', e);
     }
+  }
+};
+
+// 处理鼠标按下事件
+const handleMouseDown = (event) => {
+  console.log('[MouseDown] Triggered. Button:', event.button, 'Current mouseDown.value:', mouseDown.value); // 添加日志
+  // 如果帮助面板打开、游戏暂停、未开始游戏或游戏结束，不处理鼠标事件
+  if (showHelp.value || !gameStarted.value || gameOver.value || isPaused.value) {
+    console.log('[MouseDown] Blocked by game state.'); // 添加日志
+    return;
+  }
+  
+  // 检查是否为左键
+  if (event.button === 0) {
+    console.log('[MouseDown] Left button pressed. Setting mouseDown.value = true'); // 添加日志
+    mouseDown.value = true;
+    
+    // 记录当前鼠标位置
+    mousePosition.lastX = event.clientX;
+    mousePosition.lastY = event.clientY;
+    
+    // 启用鼠标控制
+    isMouseControlEnabled.value = true;
+    
+    console.log('[MouseDown] Calling fireSimpleBullet() immediately.'); // 添加日志
+    // 立即射击一次，不等待间隔
+    fireSimpleBullet();
+    lastShootTime.value = shootInterval; // 重置射击计时器
+
+    // --- 同时请求指针锁定 --- 
+    if (sceneContainer.value && !pointerLocked.value) {
+      console.log('请求指针锁定 (from mousedown)');
+      sceneContainer.value.requestPointerLock = sceneContainer.value.requestPointerLock ||
+                                              sceneContainer.value.mozRequestPointerLock ||
+                                              sceneContainer.value.webkitRequestPointerLock;
+      if (sceneContainer.value.requestPointerLock) {
+          sceneContainer.value.requestPointerLock();
+      } else {
+          console.warn('浏览器不支持 Pointer Lock API');
+      }
+    }
+    // --- 结束指针锁定请求 ---
+  }
+};
+
+// 处理鼠标松开事件
+const handleMouseUp = (event) => {
+  console.log('[MouseUp] Triggered. Button:', event.button, 'Current mouseDown.value:', mouseDown.value); // 添加日志
+  // 检查是否为左键
+  if (event.button === 0) {
+    console.log('[MouseUp] Left button released. Setting mouseDown.value = false'); // 添加日志
+    mouseDown.value = false;
+  }
+};
+
+// 处理鼠标移动事件 - 实现视角旋转 (仅水平)
+const handleMouseMove = (event) => {
+  // 仅在指针锁定时处理
+  if (!pointerLocked.value || isPaused.value || !gameStarted.value || gameOver.value) {
+    return;
+  }
+
+  // 获取鼠标移动增量 (兼容不同浏览器)
+  const movementX = event.movementX || (event as any).mozMovementX || (event as any).webkitMovementX || 0;
+  // const movementY = event.movementY || (event as any).mozMovementY || (event as any).webkitMovementY || 0; // 忽略 Y 轴移动
+
+  // 更新水平角度 (左右移动)
+  cameraAngleH.value -= movementX * mouseSensitivity;
+  // 保持角度在 0 到 2PI 之间 (可选)
+  // cameraAngleH.value %= (Math.PI * 2); 
+
+  // // 更新垂直角度 (上下移动) -- 移除此部分
+  // cameraAngleV.value -= movementY * mouseSensitivity;
+
+  // // 限制垂直角度范围，防止视角翻转 -- 移除此部分
+  // cameraAngleV.value = Math.max(minVerticalAngle, Math.min(maxVerticalAngle, cameraAngleV.value));
+
+  // console.log(`Mouse Move: dX=${movementX}, H=${cameraAngleH.value.toFixed(2)}, V=${cameraAngleV.value.toFixed(2)} (Locked)`);
+};
+
+// 处理画布点击事件 - 请求指针锁定 (现在此函数不再需要处理指针锁定了)
+const handleCanvasClick = (event) => {
+  // 如果帮助面板打开或游戏未开始/结束/暂停，不处理
+  if (showHelp.value || !gameStarted.value || gameOver.value || isPaused.value) {
+    return;
+  }
+
+  // --- 移除之前注释掉的指针锁定逻辑 --- 
+
+  // // 点击屏幕也尝试射击 (如果冷却完成) -- 移除此逻辑
+  // // (注意：mousedown 事件也会触发射击，这里是补充)
+  // const currentTime = performance.now() / 1000;
+  // if (currentTime - lastShootTime.value >= shootInterval && !mouseDown.value /* 避免 mousedown 和 click 同时触发两次 */) {
+  //     console.log('Click Firing');
+  //     fireSimpleBullet();
+  //     lastShootTime.value = currentTime;
+  // }
+};
+
+// 启用替代鼠标控制方案
+const useAlternativeMouseControl = () => {
+  console.log('使用替代鼠标控制方案');
+  
+  // 标记为使用替代控制
+  pointerLocked.value = false;
+  
+  // 告知用户
+  showNotification('使用替代鼠标控制：拖动鼠标改变视角');
+};
+
+// 显示临时通知
+const showNotification = (message) => {
+  const notification = document.createElement('div');
+  notification.className = 'game-notification';
+  notification.textContent = message;
+  
+  document.body.appendChild(notification);
+  
+  // 3秒后自动消失
+  setTimeout(() => {
+    if (document.body.contains(notification)) {
+      document.body.removeChild(notification);
+    }
+  }, 3000);
+};
+
+// 启用鼠标控制
+const enableMouseControl = () => {
+  console.log('启用鼠标控制');
+  
+  // 添加额外的鼠标事件处理
+  if (sceneContainer.value) {
+    // 使用mousedown而不是click以减少延迟
+    sceneContainer.value.style.cursor = 'none'; // 隐藏鼠标
+    
+    // 记录鼠标初始位置，用于计算拖动距离
+    mousePosition.lastX = window.innerWidth / 2;
+    mousePosition.lastY = window.innerHeight / 2;
+  }
+};
+
+// 监听指针锁定状态变化
+const onPointerLockChange = () => {
+  if (document.pointerLockElement === sceneContainer.value ||
+      (document as any).mozPointerLockElement === sceneContainer.value ||
+      (document as any).webkitPointerLockElement === sceneContainer.value) {
+    // 指针已锁定
+    console.log('指针已锁定');
+    pointerLocked.value = true;
+    if(sceneContainer.value) sceneContainer.value.style.cursor = 'none';
+    // (可选) 重置鼠标位置，避免锁定/解锁时的跳跃
+    mousePosition.lastX = window.innerWidth / 2;
+    mousePosition.lastY = window.innerHeight / 2;
+  } else {
+    // 指针已释放
+    console.log('指针已释放');
+    pointerLocked.value = false;
+    if(sceneContainer.value) sceneContainer.value.style.cursor = 'auto';
+    // (可选) 可以在此暂停游戏或执行其他逻辑
+  }
+};
+
+// 处理指针锁定错误
+const onPointerLockError = (e) => {
+  console.error('指针锁定错误:', e);
+  pointerLocked.value = false; // 确保状态正确
+  if(sceneContainer.value) sceneContainer.value.style.cursor = 'auto';
+};
+
+// 帮助面板中添加新的控制说明
+const updateHelpContent = () => {
+  if (showHelp.value) {
+    // 更新控制说明
+    console.log('更新控制说明');
   }
 };
 </script>
@@ -2182,5 +2455,51 @@ const startGame = () => {
   color: #aaddff;
   margin-top: 15px;
   font-size: 16px;
+}
+
+/* 暂停游戏提示 */
+.pause-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  color: white;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.pause-overlay h2 {
+  font-size: 48px;
+  margin-bottom: 20px;
+}
+
+.pause-overlay p {
+  font-size: 24px;
+}
+
+/* 游戏通知样式 */
+:global(.game-notification) {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background-color: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 15px 25px;
+  border-radius: 5px;
+  font-size: 18px;
+  z-index: 1100;
+  animation: fadeInOut 3s ease-in-out;
+}
+
+@keyframes fadeInOut {
+  0% { opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { opacity: 0; }
 }
 </style> 
