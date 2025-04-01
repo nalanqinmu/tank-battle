@@ -150,6 +150,8 @@ const lastShootTime = ref(0); // 上次射击时间
 const shootInterval = 0.3; // 射击间隔时间（秒）
 const isPaused = ref(false); // 游戏暂停状态
 const isMouseControlEnabled = ref(false); // 是否启用鼠标控制
+const showScoreDelta = ref(false); // 显示分数增加动画
+const scoreDelta = ref(0); // 分数增加值
 
 // 摄像机控制参数
 const cameraAngleH = ref(0); // 水平角度
@@ -590,17 +592,9 @@ const fireSimpleBullet = () => {
   const muzzleOffset = new THREE.Vector3(0, 0.5, 1.5); // x=0, y=0.5(中心偏上), z=1.5(炮管长度)
   const bulletPosition = tank.localToWorld(muzzleOffset.clone());
   
-  bulletMesh.position.copy(bulletPosition);
-  scene.add(bulletMesh);
-  
-  // 记录子弹信息
-  bullets.push({
-    mesh: bulletMesh,
-    direction: bulletDirection,
-    speed: 0.5,
-    lifetime: 5,
-    isActive: true
-  });
+  // 创建Bullet实例
+  const bullet = new Bullet(scene, world, bulletPosition, bulletDirection);
+  bullets.push(bullet);
   
   // 创建射击特效
   createMuzzleFlash(bulletPosition.clone(), bulletDirection);
@@ -667,8 +661,8 @@ const updateSimpleTankMovement = () => {
 
   // 同步物理体位置和旋转
   if (tankBody) {
-    tankBody.position.copy(tank.position);
-    tankBody.quaternion.copy(tank.quaternion); // 使用坦克的旋转
+    (tankBody.position as any).copy(tank.position);
+    (tankBody.quaternion as any).copy(tank.quaternion); // 使用坦克的旋转
   }
 };
 
@@ -851,7 +845,7 @@ const initializeEnemySystem = () => {
     });
 
     // 更新实例化网格的材质
-    instancedMesh.material = texturedMaterial;
+    instancedMesh.material = texturedMaterial as unknown as THREE.MeshBasicMaterial;
     console.log('敌方坦克材质已更新为纹理材质');
   }, undefined, (err) => {
     console.warn('敌方坦克纹理加载失败，保持默认材质:', err);
@@ -923,7 +917,7 @@ const spawnEnemy = () => {
   world.addBody(enemyBody);
   
   // 标记该物理体为敌人
-  enemyBody.userData = { isEnemy: true };
+  (enemyBody as any).userData = { isEnemy: true };
   
   // 记录敌人信息
   enemies.push({
@@ -931,7 +925,7 @@ const spawnEnemy = () => {
     body: enemyBody,
     health: 100,
     lastShootTime: 0
-  });
+  } as any);
   
   console.log('生成敌人，当前敌人数量:', enemies.length);
 };
@@ -951,23 +945,23 @@ const updateEnemies = (deltaTime) => {
     if (!tank) return; // 如果玩家坦克不存在，停止更新
     
     // --- 检查敌人健康状态 --- 
-    if (enemy.health <= 0) {
+    if ((enemy as any).health <= 0) {
       // 敌人被消灭
-      console.log(`敌人 ${enemy.mesh.isInstancedMesh ? '实例 ' + enemy.mesh.instanceId : 'Mesh'} 被消灭 (Index: ${index})`);
+      console.log(`敌人 ${(enemy.mesh as any).isInstancedMesh ? '实例 ' + (enemy.mesh as any).instanceId : 'Mesh'} 被消灭 (Index: ${index})`);
       createExplosion(enemy.mesh.position.clone());
       playSound(explosionSound);
       
       // 清理敌人渲染模型
-      if (!enemy.mesh.isInstancedMesh && enemy.mesh instanceof THREE.Mesh) {
+      if (!(enemy.mesh as any).isInstancedMesh && enemy.mesh instanceof THREE.Mesh) {
         scene.remove(enemy.mesh);
         console.log('移除普通敌人 Mesh');
-      } else if (enemyInstancedMesh && enemy.mesh.isInstancedMesh) {
+      } else if (enemyInstancedMesh && (enemy.mesh as any).isInstancedMesh) {
         // 对于实例化网格，缩放为0来隐藏
         try {
           const matrix = new THREE.Matrix4().makeScale(0, 0, 0);
-          enemyInstancedMesh.setMatrixAt(enemy.mesh.instanceId, matrix);
+          enemyInstancedMesh.setMatrixAt((enemy.mesh as any).instanceId, matrix);
           // instanceMatrix.needsUpdate 会在循环外统一设置
-          console.log('隐藏敌人实例:', enemy.mesh.instanceId);
+          console.log('隐藏敌人实例:', (enemy.mesh as any).instanceId);
         } catch (error) {
           console.error('隐藏敌人实例出错:', error, enemy);
         }
@@ -1046,21 +1040,21 @@ const updateEnemies = (deltaTime) => {
     // --- 更新虚拟网格和物理实体 --- 
     enemy.mesh.position.copy(newPosition);
     enemy.mesh.rotation.y = targetAngle; // 更新虚拟旋转
-    enemy.body.position.copy(newPosition);
+    (enemy.body.position as any).copy(newPosition);
     enemy.body.quaternion.setFromEuler(0, targetAngle, 0); // 更新物理旋转
     
     // --- 更新渲染模型（Mesh 或 InstancedMesh） --- 
-    if (!enemy.mesh.isInstancedMesh && enemy.mesh instanceof THREE.Mesh) {
+    if (!(enemy.mesh as any).isInstancedMesh && enemy.mesh instanceof THREE.Mesh) {
       // 普通网格: 直接更新
       enemy.mesh.position.copy(newPosition);
       enemy.mesh.rotation.y = targetAngle; 
-    } else if (enemyInstancedMesh && enemy.mesh.isInstancedMesh) {
+    } else if (enemyInstancedMesh && (enemy.mesh as any).isInstancedMesh) {
       // 实例化网格: 更新矩阵
       try {
         const matrix = new THREE.Matrix4();
         matrix.makeRotationY(targetAngle); // 应用旋转
         matrix.setPosition(newPosition);   // 应用位置
-        enemyInstancedMesh.setMatrixAt(enemy.mesh.instanceId, matrix);
+        enemyInstancedMesh.setMatrixAt((enemy.mesh as any).instanceId, matrix);
         // instanceMatrix.needsUpdate 会在循环外统一设置
       } catch (error) {
         console.error('更新敌人实例矩阵出错:', error, enemy);
@@ -1069,16 +1063,16 @@ const updateEnemies = (deltaTime) => {
     
     // --- 处理射击 --- 
     if (distanceToPlayer < 20) { // 射击距离
-        enemy.lastShootTime -= deltaTime;
-        if (enemy.lastShootTime <= 0 && distanceToPlayer > 5 /* 不要离太近射击 */) { 
+        (enemy as any).lastShootTime -= deltaTime;
+        if ((enemy as any).lastShootTime <= 0 && distanceToPlayer > 5 /* 不要离太近射击 */) { 
             fireEnemyBullet(enemy);
-            enemy.lastShootTime = 2 + Math.random() * 2; // 2-4秒射击一次
+            (enemy as any).lastShootTime = 2 + Math.random() * 2; // 2-4秒射击一次
         }
     }
   }
   
   // 在所有实例矩阵更新后，标记 instanceMatrix 需要更新
-  if (enemyInstancedMesh && enemies.some(e => e.mesh.isInstancedMesh)) { // 只有在确实有实例时才标记
+  if (enemyInstancedMesh && enemies.some(e => (e.mesh as any).isInstancedMesh)) { // 只有在确实有实例时才标记
       enemyInstancedMesh.instanceMatrix.needsUpdate = true;
   }
 };
@@ -1124,11 +1118,6 @@ const fireEnemyBullet = (enemy) => {
     return;
   }
   
-  // 创建子弹
-  const bulletGeometry = new THREE.SphereGeometry(0.2, 8, 8);
-  const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-  const bulletMesh = new THREE.Mesh(bulletGeometry, bulletMaterial);
-  
   // 子弹发射方向（朝向玩家）
   const direction = new THREE.Vector3();
   direction.subVectors(tank.position, enemy.mesh.position).normalize();
@@ -1138,18 +1127,10 @@ const fireEnemyBullet = (enemy) => {
     direction.clone().multiplyScalar(2)
   );
   bulletPosition.y = 1;
-  bulletMesh.position.copy(bulletPosition);
   
-  scene.add(bulletMesh);
-  
-  // 记录子弹信息
-  enemyBullets.push({
-    mesh: bulletMesh,
-    direction: direction,
-    speed: 0.3,
-    lifetime: 5,
-    isActive: true
-  });
+  // 使用Bullet类创建敌人子弹
+  const bullet = new Bullet(scene, world, bulletPosition, direction);
+  enemyBullets.push(bullet);
   
   // 创建射击特效
   createMuzzleFlash(bulletPosition.clone(), direction);
@@ -1197,7 +1178,7 @@ const checkCollisions = () => {
       
       if (distance < 2) { // 简单的距离检测
         // 敌人受伤
-        enemy.health -= 50;
+        (enemy as any).health -= 50;
         
         // 显示得分动画
         showScoreAnimation(enemy.mesh.position.clone(), 50);
@@ -1249,7 +1230,7 @@ const checkCollisions = () => {
         const pushDirection = new THREE.Vector3();
         pushDirection.subVectors(enemy.mesh.position, tank.position).normalize();
         enemy.mesh.position.add(pushDirection.multiplyScalar(0.1));
-        enemy.body.position.copy(enemy.mesh.position);
+        (enemy.body.position as any).copy(enemy.mesh.position);
       }
     }
   }
@@ -1261,15 +1242,12 @@ const updateBullets = (deltaTime) => {
   for (let i = bullets.length - 1; i >= 0; i--) {
     const bullet = bullets[i];
     
-    // 移动子弹
-    bullet.mesh.position.add(bullet.direction.clone().multiplyScalar(bullet.speed));
-    
-    // 更新生命周期
-    bullet.lifetime -= deltaTime;
+    // 更新子弹
+    bullet.update(deltaTime);
     
     // 检查子弹是否应该销毁
-    if (bullet.lifetime <= 0) {
-      scene.remove(bullet.mesh);
+    if (!bullet.isActive) {
+      bullet.destroy(scene, world);
       bullets.splice(i, 1);
       continue; // 跳过后续检查
     }
@@ -1283,7 +1261,7 @@ const updateBullets = (deltaTime) => {
         createHitEffect(bullet.mesh.position.clone());
         
         // 移除子弹
-        scene.remove(bullet.mesh);
+        bullet.destroy(scene, world);
         bullets.splice(i, 1);
         
         hitObstacle = true;
@@ -1300,13 +1278,13 @@ const updateBullets = (deltaTime) => {
       
       if (distance < 2) { // 简单的距离检测
         // 敌人受伤
-        enemy.health -= 50;
+        (enemy as any).health -= 50;
         
         // 显示得分动画
         showScoreAnimation(enemy.mesh.position.clone(), 50);
         
         // 移除子弹
-        scene.remove(bullet.mesh);
+        bullet.destroy(scene, world);
         bullets.splice(i, 1);
         
         // 创建命中特效
@@ -1320,15 +1298,12 @@ const updateBullets = (deltaTime) => {
   for (let i = enemyBullets.length - 1; i >= 0; i--) {
     const bullet = enemyBullets[i];
     
-    // 移动子弹
-    bullet.mesh.position.add(bullet.direction.clone().multiplyScalar(bullet.speed));
-    
-    // 更新生命周期
-    bullet.lifetime -= deltaTime;
+    // 更新子弹
+    bullet.update(deltaTime);
     
     // 检查子弹是否应该销毁
-    if (bullet.lifetime <= 0) {
-      scene.remove(bullet.mesh);
+    if (!bullet.isActive) {
+      bullet.destroy(scene, world);
       enemyBullets.splice(i, 1);
       continue; // 跳过后续检查
     }
@@ -1342,7 +1317,7 @@ const updateBullets = (deltaTime) => {
         createHitEffect(bullet.mesh.position.clone());
         
         // 移除子弹
-        scene.remove(bullet.mesh);
+        bullet.destroy(scene, world);
         enemyBullets.splice(i, 1);
         
         hitObstacle = true;
@@ -1361,7 +1336,7 @@ const updateBullets = (deltaTime) => {
         damagePlayer(10);
         
         // 移除子弹
-        scene.remove(bullet.mesh);
+        bullet.destroy(scene, world);
         enemyBullets.splice(i, 1);
         
         // 创建命中特效
@@ -1456,7 +1431,7 @@ const createExplosion = (position) => {
   scene.add(particleSystem);
   
   // 粒子速度 - 更快更爆炸性
-  const velocities = [];
+  const velocities: Array<{x: number, y: number, z: number}> = [];
   for (let i = 0; i < particleCount; i++) {
     // 随机方向，速度更快
     velocities.push({
@@ -1490,7 +1465,7 @@ const createExplosion = (position) => {
   scene.add(smokeSystem);
   
   // 烟雾速度
-  const smokeVelocities = [];
+  const smokeVelocities: Array<{x: number, y: number, z: number}> = [];
   for (let i = 0; i < smokeCount; i++) {
     smokeVelocities.push({
       x: (Math.random() - 0.5) * 0.1,
@@ -1525,21 +1500,21 @@ const createExplosion = (position) => {
     // 粒子运动
     const positions = particleSystem.geometry.attributes.position.array;
     for (let i = 0; i < particleCount; i++) {
-      positions[i * 3] += velocities[i].x;
-      positions[i * 3 + 1] += velocities[i].y;
-      positions[i * 3 + 2] += velocities[i].z;
+      positions[i * 3] += (velocities[i] as any).x;
+      positions[i * 3 + 1] += (velocities[i] as any).y;
+      positions[i * 3 + 2] += (velocities[i] as any).z;
       
       // 粒子逐渐减速
-      velocities[i].y -= 0.01; // 重力效果
+      (velocities[i] as any).y -= 0.01; // 重力效果
     }
     particleSystem.geometry.attributes.position.needsUpdate = true;
     
     // 烟雾运动 - 缓慢上升
     const smokePositions = smokeSystem.geometry.attributes.position.array;
     for (let i = 0; i < smokeCount; i++) {
-      smokePositions[i * 3] += smokeVelocities[i].x;
-      smokePositions[i * 3 + 1] += smokeVelocities[i].y;
-      smokePositions[i * 3 + 2] += smokeVelocities[i].z;
+      smokePositions[i * 3] += (smokeVelocities[i] as any).x;
+      smokePositions[i * 3 + 1] += (smokeVelocities[i] as any).y;
+      smokePositions[i * 3 + 2] += (smokeVelocities[i] as any).z;
     }
     smokeSystem.geometry.attributes.position.needsUpdate = true;
     
@@ -1963,8 +1938,8 @@ const handleMouseDown = (event) => {
     if (sceneContainer.value && !pointerLocked.value) {
       console.log('请求指针锁定 (from mousedown)');
       sceneContainer.value.requestPointerLock = sceneContainer.value.requestPointerLock ||
-                                              sceneContainer.value.mozRequestPointerLock ||
-                                              sceneContainer.value.webkitRequestPointerLock;
+                                             (sceneContainer.value as any).mozRequestPointerLock ||
+                                             (sceneContainer.value as any).webkitRequestPointerLock;
       if (sceneContainer.value.requestPointerLock) {
           sceneContainer.value.requestPointerLock();
       } else {

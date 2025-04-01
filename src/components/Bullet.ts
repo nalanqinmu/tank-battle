@@ -6,6 +6,9 @@ export class Bullet {
   body: CANNON.Body;
   timeToLive: number;
   isActive: boolean;
+  direction: THREE.Vector3;
+  speed: number;
+  lifetime: number;
 
   constructor(scene: THREE.Scene, world: CANNON.World, position: THREE.Vector3, direction: THREE.Vector3) {
     // 创建子弹网格
@@ -29,6 +32,11 @@ export class Bullet {
     // 设置生命周期和状态
     this.timeToLive = 2; // 2秒后消失
     this.isActive = true;
+    
+    // 添加新属性
+    this.direction = direction.clone();
+    this.speed = 0.5;
+    this.lifetime = 5;
   }
 
   update(deltaTime: number): void {
@@ -36,7 +44,8 @@ export class Bullet {
 
     // 更新生命周期
     this.timeToLive -= deltaTime;
-    if (this.timeToLive <= 0) {
+    this.lifetime -= deltaTime;
+    if (this.timeToLive <= 0 || this.lifetime <= 0) {
       this.isActive = false;
       return;
     }
