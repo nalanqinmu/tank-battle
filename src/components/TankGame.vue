@@ -134,6 +134,7 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { Bullet } from './Bullet';
 import { EnemyTank } from './EnemyTank';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 
 // 游戏状态
 const score = ref(0);
@@ -179,7 +180,8 @@ let tankBody: CANNON.Body | null = null;
 let bullets: Bullet[] = [];
 let enemyBullets: Bullet[] = [];
 let enemies: EnemyTank[] = [];
-let obstacles: { mesh: THREE.Mesh, body: CANNON.Body }[] = []; // 掩体数组
+// 将 obstacles 的 mesh 类型改为 Object3D 以兼容 Mesh 和 Group
+let obstacles: { mesh: THREE.Object3D, body: CANNON.Body }[] = []; // 掩体数组
 let lastTime = 0;
 let enemySpawnTimer = 0;
 let animationFrameId: number | null = null;
@@ -202,6 +204,12 @@ const keys = {
   h: false, // 添加H键用于显示帮助面板
   p: false  // 添加P键用于暂停游戏
 };
+
+// 添加新的 ref 来存储加载的模型和加载状态
+const loadedObstacleModel = ref<THREE.Group | null>(null); // 存储加载的模型
+const loadedConeModel = ref<THREE.Group | null>(null); // 存储圆锥体模型
+const loadedCylinderModel = ref<THREE.Group | null>(null); // 存储圆柱体模型
+const obstacleModelLoading = ref(false); // 跟踪加载状态
 
 // 检查WebGL支持
 const checkWebGLSupport = (): boolean => {
@@ -408,48 +416,47 @@ const playSound = (sound) => {
 // 初始化Three.js场景
 const initScene = () => {
   if (!sceneContainer.value) return;
-  
+
   console.log('初始化场景');
-  
+
   // 检查WebGL支持
   if (!checkWebGLSupport()) {
     console.error('WebGL不受支持');
     webGLSupported.value = false;
     return;
   }
-  
+
   // 创建场景
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x87CEEB);
-  
+
   try {
     // 创建相机
     const aspect = window.innerWidth / window.innerHeight;
-    camera = new THREE.PerspectiveCamera(60, aspect, 0.1, 1000); 
+    camera = new THREE.PerspectiveCamera(60, aspect, 0.1, 1000);
     // 初始位置和朝向将在 updateCamera 中设置
-    // camera.lookAt(0, 0, 0);
-    
+
     // 创建渲染器
-    renderer = new THREE.WebGLRenderer({ 
+    renderer = new THREE.WebGLRenderer({
       antialias: true,
       canvas: document.createElement('canvas')
     });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setClearColor(0x87CEEB, 1);
-    
+
     // 添加到DOM
     sceneContainer.value.innerHTML = '';
     sceneContainer.value.appendChild(renderer.domElement);
-    
-    // 添加鼠标事件监听 - click 触发 PointerLock, mousemove 由 document 监听
+
+    // 添加鼠标事件监听
     renderer.domElement.addEventListener('click', handleCanvasClick);
-    document.addEventListener('mousemove', handleMouseMove); // 监听 document
-    document.addEventListener('mousedown', handleMouseDown); // 在 document 上添加监听器
-    document.addEventListener('mouseup', handleMouseUp); // 监听 document
-    
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mousedown', handleMouseDown);
+    document.addEventListener('mouseup', handleMouseUp);
+
     // 添加窗口大小调整
     window.addEventListener('resize', onWindowResize);
-    
+
     // 添加灯光
     const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
     scene.add(ambientLight);
@@ -460,24 +467,114 @@ const initScene = () => {
     directionalLight.castShadow = true;
     scene.add(directionalLight);
     
-    // 创建简单场景
-    createSimpleScene();
+    // --- 预加载障碍物模型 ---
+    obstacleModelLoading.value = true;
+    const loader = new GLTFLoader();
     
-    // 初始化敌人渲染系统
-    console.log('初始化敌人渲染系统...');
-    enemyInstancedMesh = initializeEnemySystem();
-    console.log('敌人实例化网格初始化完成:', enemyInstancedMesh);
+    // 创建一个Promise数组来跟踪所有模型加载
+    const modelLoadPromises: Promise<void>[] = [];
     
-    // 初始化声音系统
-    initSounds();
+    // 加载立方体障碍物模型
+    const cubeModelPromise = new Promise<void>((resolve) => {
+      loader.load(
+        '/models/obstacle.glb',
+        (gltf) => {
+          console.log('方块障碍物模型加载成功');
+          gltf.scene.traverse((child) => {
+            if ((child as THREE.Mesh).isMesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+            }
+          });
+          loadedObstacleModel.value = gltf.scene;
+          resolve();
+        },
+        undefined,
+        (error) => {
+          console.error('方块障碍物模型加载失败:', error);
+          resolve(); // Continue even if failed
+        }
+      );
+    });
+    modelLoadPromises.push(cubeModelPromise);
     
-    // 立即渲染一次确认场景可见
-    renderer.render(scene, camera);
-    console.log('初次渲染完成');
+    // 加载圆锥体障碍物模型
+    const coneModelPromise = new Promise<void>((resolve) => {
+      loader.load(
+        '/models/cone_obstacle.glb',
+        (gltf) => {
+          console.log('圆锥体障碍物模型加载成功');
+          gltf.scene.traverse((child) => {
+            if ((child as THREE.Mesh).isMesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+            }
+          });
+          loadedConeModel.value = gltf.scene;
+          resolve();
+        },
+        undefined,
+        (error) => {
+          console.error('圆锥体障碍物模型加载失败:', error);
+          resolve(); // Continue even if failed
+        }
+      );
+    });
+    modelLoadPromises.push(coneModelPromise);
+
+    // 加载圆柱体障碍物模型
+    const cylinderModelPromise = new Promise<void>((resolve) => {
+      loader.load(
+        '/models/cylinder_obstacle.glb',
+        (gltf) => {
+          console.log('圆柱体障碍物模型加载成功');
+          gltf.scene.traverse((child) => {
+             if ((child as THREE.Mesh).isMesh) {
+               child.castShadow = true;
+               child.receiveShadow = true;
+             }
+          });
+          loadedCylinderModel.value = gltf.scene;
+          resolve();
+        },
+        undefined,
+        (error) => {
+          console.error('圆柱体障碍物模型加载失败:', error);
+          resolve(); // Continue even if failed
+        }
+      );
+    });
+    modelLoadPromises.push(cylinderModelPromise);
+    
+    // 等待所有模型加载完成或失败
+    Promise.all(modelLoadPromises).then(() => {
+      obstacleModelLoading.value = false;
+      
+      // 所有模型加载尝试完成后，创建场景
+      createSimpleScene();
+      
+      // 初始化敌人渲染系统
+      enemyInstancedMesh = initializeEnemySystem();
+      
+      // 初始化声音系统
+      initSounds();
+      
+      // 立即渲染一次确认场景可见
+      if (renderer && scene && camera) {
+        renderer.render(scene, camera);
+      }
+    }).catch(error => {
+      // ... handle Promise.all errors ...
+      obstacleModelLoading.value = false;
+      createSimpleScene();
+      enemyInstancedMesh = initializeEnemySystem();
+      initSounds();
+      if (renderer && scene && camera) renderer.render(scene, camera);
+    });
+    // --- 结束模型加载 ---
     
   } catch (e) {
-    console.error('初始化错误:', e);
-    webGLSupported.value = false;
+    // ... handle initScene errors ...
   }
 };
 
@@ -777,7 +874,7 @@ const restartGame = () => {
   });
   enemies = [];
   
-  // 清理所有掩体
+  // 清理所有掩体 - 无需修改，Object3D 可以直接移除
   obstacles.forEach(obstacle => {
     scene.remove(obstacle.mesh);
     world.removeBody(obstacle.body);
@@ -1622,106 +1719,150 @@ const updateGridHelperVisibility = () => {
   });
 };
 
-// 创建随机掩体
+// 创建随机掩体 - 修改版，使用多种形状
 const createObstacles = (count: number) => {
-  console.log(`创建${count}个掩体...`);
+  console.log(`尝试创建${count}个掩体...`);
+
+  // 检查是否有任何模型已加载成功
+  const hasLoadedModels = loadedObstacleModel.value || loadedConeModel.value || loadedCylinderModel.value;
   
-  // 创建掩体纹理加载器
-  const textureLoader = new THREE.TextureLoader();
-  
-  // 尝试加载掩体纹理
-  textureLoader.load('/textures/obstacle_texture.jpg', (texture) => {
-    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  if (!hasLoadedModels) {
+    console.warn('障碍物模型未加载成功，将使用内置几何体作为回退。');
     
-    // 创建基础的掩体几何体和材质
-    const obstacleGeometry = new THREE.BoxGeometry(3, 2, 3);
-    const obstacleMaterial = new THREE.MeshStandardMaterial({
-      map: texture,
-      metalness: 0.2,
-      roughness: 0.8
-    });
+    // 几何体类型列表
+    const geometries = [
+      new THREE.BoxGeometry(3, 2, 3),     // 正方体
+      new THREE.ConeGeometry(1.5, 3, 8),  // 圆锥体
+      new THREE.CylinderGeometry(1.5, 1.5, 3, 8) // 圆柱体
+    ];
     
-    // 在场景中随机生成掩体
+    // 材质列表
+    const materials = [
+      new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.7 }), // 棕色
+      new THREE.MeshStandardMaterial({ color: 0x4B6F44, roughness: 0.7 }), // 绿色
+      new THREE.MeshStandardMaterial({ color: 0x607D8B, roughness: 0.6 })  // 蓝灰色
+    ];
+
     for (let i = 0; i < count; i++) {
-      // 随机位置（避开玩家初始位置）
       let x, z, distanceFromPlayer;
       do {
-        x = (Math.random() - 0.5) * 80; // -40 到 40 之间
-        z = (Math.random() - 0.5) * 80; // -40 到 40 之间
+        x = (Math.random() - 0.5) * 80;
+        z = (Math.random() - 0.5) * 80;
         distanceFromPlayer = Math.sqrt(x * x + z * z);
-      } while (distanceFromPlayer < 10); // 确保与玩家有一定距离
+      } while (distanceFromPlayer < 10);
+
+      // 随机选择几何体和材质
+      const geomIndex = Math.floor(Math.random() * geometries.length);
+      const matIndex = Math.floor(Math.random() * materials.length);
       
-      // 创建掩体网格
-      const obstacle = new THREE.Mesh(obstacleGeometry, obstacleMaterial);
-      obstacle.position.set(x, 1, z); // 设置掩体高度为1（一半高度）
-      obstacle.rotation.y = Math.random() * Math.PI * 2; // 随机旋转
-      scene.add(obstacle);
+      const obstacleMesh = new THREE.Mesh(geometries[geomIndex], materials[matIndex]);
       
-      // 创建掩体物理体
-      const obstacleShape = new CANNON.Box(new CANNON.Vec3(1.5, 1, 1.5)); // 半尺寸
-      const obstacleBody = new CANNON.Body({
-        mass: 0, // 静态物体，质量为0
-        position: new CANNON.Vec3(x, 1, z),
-        shape: obstacleShape
-      });
+      // 调整位置 - 圆锥体和圆柱体需要调整Y轴使底部与地面接触
+      let yPos = 1;
+      if (geomIndex === 1 || geomIndex === 2) { // Cone or Cylinder
+         yPos = 1.5; // Height is 3, half-height is 1.5
+      }
+      obstacleMesh.position.set(x, yPos, z);
+      obstacleMesh.rotation.y = Math.random() * Math.PI * 2;
+      scene.add(obstacleMesh);
+
+      // 创建物理体 - 根据几何体类型选择不同的物理形状
+      let obstacleShape;
+      let obstacleBody;
       
-      obstacleBody.quaternion.setFromEuler(0, obstacle.rotation.y, 0);
+      if (geomIndex === 0) { // 方块
+        obstacleShape = new CANNON.Box(new CANNON.Vec3(1.5, 1, 1.5));
+        obstacleBody = new CANNON.Body({ mass: 0, position: new CANNON.Vec3(x, 1, z), shape: obstacleShape });
+      } else if (geomIndex === 1) { // 圆锥体 - 用圆柱体近似
+        obstacleShape = new CANNON.Cylinder(0.2, 1.5, 3, 8);
+        obstacleBody = new CANNON.Body({ mass: 0, position: new CANNON.Vec3(x, 1.5, z), shape: obstacleShape });
+      } else { // 圆柱体
+        obstacleShape = new CANNON.Cylinder(1.5, 1.5, 3, 8);
+        obstacleBody = new CANNON.Body({ mass: 0, position: new CANNON.Vec3(x, 1.5, z), shape: obstacleShape });
+      }
+      
+      obstacleBody.quaternion.setFromEuler(0, obstacleMesh.rotation.y, 0);
       world.addBody(obstacleBody);
-      
-      // 记录掩体信息
-      obstacles.push({
-        mesh: obstacle,
-        body: obstacleBody
-      });
+
+      obstacles.push({ mesh: obstacleMesh, body: obstacleBody });
     }
     
-    console.log(`成功创建${obstacles.length}个掩体`);
-  }, undefined, (err) => {
-    console.warn('无法加载掩体纹理，使用基本材质:', err);
+    console.log(`已创建${obstacles.length}个回退几何体掩体`);
+    return; // 结束函数执行
+  }
+
+  console.log('使用加载的 GLB 模型创建掩体');
+  
+  // 使用加载的模型创建掩体
+  const availableModels: THREE.Group[] = [];
+  if (loadedObstacleModel.value) availableModels.push(loadedObstacleModel.value);
+  if (loadedConeModel.value) availableModels.push(loadedConeModel.value);
+  if (loadedCylinderModel.value) availableModels.push(loadedCylinderModel.value);
+
+  for (let i = 0; i < count; i++) {
+    // 随机位置（避开玩家初始位置）
+    let x, z, distanceFromPlayer;
+    do {
+      x = (Math.random() - 0.5) * 80;
+      z = (Math.random() - 0.5) * 80;
+      distanceFromPlayer = Math.sqrt(x * x + z * z);
+    } while (distanceFromPlayer < 10);
+
+    // 随机选择一个可用的模型模板
+    const modelIndex = Math.floor(Math.random() * availableModels.length);
+    const modelTemplate = availableModels[modelIndex];
     
-    // 使用基本材质创建掩体
-    const obstacleGeometry = new THREE.BoxGeometry(3, 2, 3);
-    const obstacleMaterial = new THREE.MeshBasicMaterial({ 
-      color: 0x8B4513, // 棕色
-      wireframe: false
+    if (!modelTemplate) {
+      console.error('无法选择模型模板');
+      continue;
+    }
+    
+    const obstacleMesh = modelTemplate.clone();
+
+    // 设置位置和旋转
+    obstacleMesh.position.set(x, 0, z);
+    obstacleMesh.rotation.y = Math.random() * Math.PI * 2;
+    scene.add(obstacleMesh);
+
+    // 创建物理体
+    let obstacleShape;
+    let obstacleBody;
+    let yBodyPos = 1; // Default for box
+    
+    // 判断是哪种模型并创建对应的物理形状
+    if (modelTemplate === loadedObstacleModel.value) {
+      // 方块物理形状
+      obstacleShape = new CANNON.Box(new CANNON.Vec3(1.5, 1, 1.5));
+      yBodyPos = 1;
+    } else if (modelTemplate === loadedConeModel.value) {
+      // 圆锥体物理形状 - 使用圆柱体近似
+      obstacleShape = new CANNON.Cylinder(0.2, 1.5, 3, 8); 
+      yBodyPos = 1.5;
+    } else if (modelTemplate === loadedCylinderModel.value) {
+      // 圆柱体物理形状
+      obstacleShape = new CANNON.Cylinder(1.5, 1.5, 3, 8);
+      yBodyPos = 1.5;
+    } else {
+        console.error('未知模型类型，无法创建物理体');
+        continue;
+    }
+
+    obstacleBody = new CANNON.Body({
+      mass: 0,
+      position: new CANNON.Vec3(x, yBodyPos, z),
+      shape: obstacleShape
     });
-    
-    // 在场景中随机生成掩体
-    for (let i = 0; i < count; i++) {
-      // 随机位置（避开玩家初始位置）
-      let x, z, distanceFromPlayer;
-      do {
-        x = (Math.random() - 0.5) * 80; // -40 到 40 之间
-        z = (Math.random() - 0.5) * 80; // -40 到 40 之间
-        distanceFromPlayer = Math.sqrt(x * x + z * z);
-      } while (distanceFromPlayer < 10); // 确保与玩家有一定距离
-      
-      // 创建掩体网格
-      const obstacle = new THREE.Mesh(obstacleGeometry, obstacleMaterial);
-      obstacle.position.set(x, 1, z); // 设置掩体高度为1（一半高度）
-      obstacle.rotation.y = Math.random() * Math.PI * 2; // 随机旋转
-      scene.add(obstacle);
-      
-      // 创建掩体物理体
-      const obstacleShape = new CANNON.Box(new CANNON.Vec3(1.5, 1, 1.5)); // 半尺寸
-      const obstacleBody = new CANNON.Body({
-        mass: 0, // 静态物体，质量为0
-        position: new CANNON.Vec3(x, 1, z),
-        shape: obstacleShape
-      });
-      
-      obstacleBody.quaternion.setFromEuler(0, obstacle.rotation.y, 0);
-      world.addBody(obstacleBody);
-      
-      // 记录掩体信息
-      obstacles.push({
-        mesh: obstacle,
-        body: obstacleBody
-      });
-    }
-    
-    console.log(`成功创建${obstacles.length}个掩体（基本材质）`);
-  });
+
+    obstacleBody.quaternion.setFromEuler(0, obstacleMesh.rotation.y, 0);
+    world.addBody(obstacleBody);
+
+    obstacles.push({
+      mesh: obstacleMesh,
+      body: obstacleBody
+    });
+  }
+
+  console.log(`成功创建${obstacles.length}个多样化障碍物`);
 };
 
 // 组件挂载时初始化
@@ -1866,7 +2007,8 @@ const updateCamera = () => {
   raycaster.far = followDistance; // 只检查相机和坦克之间的距离
 
   // 获取可能阻挡视线的物体 (只检查障碍物)
-  const intersects = raycaster.intersectObjects(obstacles.map(o => o.mesh)); 
+  // intersectObjects 可以处理 Object3D 数组，需要设置 recursive 为 true
+  const intersects = raycaster.intersectObjects(obstacles.map(o => o.mesh), true);
 
   let finalCameraPosition = idealPosition;
   if (intersects.length > 0) {
