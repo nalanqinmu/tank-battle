@@ -820,7 +820,8 @@ const initializeEnemySystem = () => {
     color: 0xff4444, // 鲜明的红色
     wireframe: false // 实体显示
   });
-  const instancedMesh = new THREE.InstancedMesh(enemyGeometry, defaultMaterial, 10); // 假设最多10个敌人
+  // 明确指定材质类型为 THREE.Material
+  const instancedMesh: THREE.InstancedMesh<THREE.BoxGeometry, THREE.Material> = new THREE.InstancedMesh(enemyGeometry, defaultMaterial, 10);
   instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); // 允许高效更新矩阵
   instancedMesh.count = 0; // 初始实例数量为0
   scene.add(instancedMesh); // 将实例化网格添加到场景
@@ -844,8 +845,8 @@ const initializeEnemySystem = () => {
       roughness: 0.3
     });
 
-    // 更新实例化网格的材质
-    instancedMesh.material = texturedMaterial as unknown as THREE.MeshBasicMaterial;
+    // 更新实例化网格的材质 (保持修正)
+    instancedMesh.material = texturedMaterial;
     console.log('敌方坦克材质已更新为纹理材质');
   }, undefined, (err) => {
     console.warn('敌方坦克纹理加载失败，保持默认材质:', err);
